@@ -69,7 +69,11 @@ st.markdown(
         margin-bottom: 0.1rem !important;
     }
 
-    h2, h3 {
+    h2, h3,
+    div[data-testid="stMarkdownContainer"] h1,
+    div[data-testid="stMarkdownContainer"] h2,
+    div[data-testid="stMarkdownContainer"] h3 {
+        color: #102a2a !important;
         letter-spacing: 0 !important;
     }
 
@@ -740,5 +744,6 @@ with tabs[0]:
     render_recent_matches(played)
 with tabs[1]:
     render_participants()
+
 
 
