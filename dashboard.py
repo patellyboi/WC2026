@@ -9,9 +9,11 @@ from database import (
     connect,
     init_db,
     leaderboard,
+    lock_match_prediction,
+    match_predictions,
     played_matches,
-    recent_matches,
     score_events,
+    upcoming_matches,
     top_scoring_teams,
     tournament_stats,
 )
@@ -395,6 +397,108 @@ st.markdown(
         margin: 0.25rem 0 0.75rem;
         text-transform: uppercase;
     }
+
+    div[data-testid="stExpander"] details summary {
+        background: #ffffff !important;
+        border: 1px solid #b8eadf !important;
+        border-radius: 8px !important;
+        color: #102a2a !important;
+        opacity: 1 !important;
+    }
+
+    div[data-testid="stExpander"] details summary * {
+        color: #102a2a !important;
+        opacity: 1 !important;
+        font-weight: 900 !important;
+    }
+
+    div[data-testid="stExpander"] details summary:hover {
+        background: #e6fcf5 !important;
+        color: #004f48 !important;
+    }
+
+    div[data-testid="stExpander"] details summary:hover * {
+        color: #004f48 !important;
+    }
+
+    div[data-testid="stNumberInput"] label,
+    div[data-testid="stSelectbox"] label,
+    div[data-testid="stCheckbox"] label,
+    div[data-testid="stCheckbox"] p {
+        color: #102a2a !important;
+        opacity: 1 !important;
+        font-weight: 800 !important;
+    }
+
+    div[data-testid="stNumberInput"] input,
+    div[data-baseweb="select"] > div {
+        background: #ffffff !important;
+        border: 1px solid #96f2d7 !important;
+        color: #102a2a !important;
+        min-height: 2.45rem !important;
+    }
+
+    div[data-testid="stNumberInput"] button,
+    div[data-testid="stNumberInput"] button svg,
+    div[data-baseweb="select"] svg {
+        color: #007f73 !important;
+        fill: #007f73 !important;
+    }
+
+    div[data-baseweb="popover"],
+    div[data-baseweb="menu"],
+    div[role="listbox"] {
+        background: #ffffff !important;
+        color: #102a2a !important;
+    }
+
+    div[role="option"] {
+        color: #102a2a !important;
+    }
+
+    .prediction-match-row {
+        align-items: center;
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: minmax(220px, 1.55fr) minmax(90px, 0.55fr) minmax(90px, 0.55fr) minmax(160px, 0.9fr) minmax(140px, 0.75fr) minmax(110px, 0.55fr);
+        margin-top: 0.45rem;
+    }
+
+    .prediction-player-chip {
+        border-left: 6px solid currentColor;
+        background: #ffffff;
+        border-radius: 8px;
+        padding: 0.48rem 0.65rem;
+        box-shadow: 0 3px 10px rgba(8, 112, 105, 0.06);
+    }
+
+    .prediction-player-name {
+        font-size: 1rem;
+        font-weight: 950;
+        line-height: 1.1;
+    }
+
+    .prediction-player-meta {
+        color: #667085;
+        font-size: 0.78rem;
+        font-weight: 800;
+        margin-top: 0.12rem;
+        text-transform: uppercase;
+    }
+
+    @media (max-width: 900px) {
+        .prediction-match-row {
+            grid-template-columns: 1fr 1fr;
+        }
+    }
+
+    div[data-testid="stCheckbox"] {
+        padding-top: 1.62rem !important;
+    }
+
+    div.stButton {
+        padding-top: 1.48rem !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -414,11 +518,11 @@ def load_state():
     init_db(conn)
     leaders = [dict(row) for row in leaderboard(conn)]
     events = [dict(row) for row in score_events(conn)]
-    matches = [dict(row) for row in recent_matches(conn)]
-    played = [dict(row) for row in played_matches(conn)]
     stats = tournament_stats(conn)
     teams = [dict(row) for row in top_scoring_teams(conn)]
-    return conn, leaders, events, matches, played, stats, teams
+    upcoming = [dict(row) for row in upcoming_matches(conn)]
+    played = [dict(row) for row in played_matches(conn)]
+    return conn, leaders, events, stats, teams, upcoming, played
 
 
 @st.cache_data(ttl=300)
@@ -654,6 +758,127 @@ def render_recent_matches(matches):
             unsafe_allow_html=True,
         )
 
+def render_match_predictions(conn, matches):
+    st.subheader("Predictions")
+    if not matches:
+        st.info("No upcoming matches are stored yet. Use Update Results to pull fixtures.")
+        return
+
+    if "prediction_player" not in st.session_state:
+        st.session_state.prediction_player = next(iter(PLAYERS))
+
+    player_columns = st.columns(len(PLAYERS))
+    for column, player in zip(player_columns, PLAYERS):
+        with column:
+            button_label = player
+            if player == st.session_state.prediction_player:
+                button_label = f"Selected: {player}"
+            if st.button(button_label, key=f"prediction_player_{player}", use_container_width=True):
+                st.session_state.prediction_player = player
+                st.rerun()
+
+    selected_player = st.session_state.prediction_player
+    color = player_color(selected_player)
+    st.markdown(
+        f'<div class="list-title" style="color:{color};margin:0.45rem 0 0.8rem">Entering predictions for {escape(selected_player)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    for match in matches:
+        locked_predictions = {
+            row["player"]: dict(row)
+            for row in match_predictions(conn, match["id"])
+        }
+        home_team = match["home_team"] or "Home"
+        away_team = match["away_team"] or "Away"
+        stage = title_case_label(match["stage"] or "Upcoming")
+        locked = locked_predictions.get(selected_player)
+
+        with st.expander(
+            f"{home_team} vs {away_team} - {stage}",
+            expanded=locked is None,
+        ):
+            st.markdown(
+                (
+                    '<div class="list-card">'
+                    '<div class="list-top">'
+                    "<div>"
+                    f'<div class="match-title">{escape(home_team)} vs {escape(away_team)}</div>'
+                    f'<div class="match-meta">{escape(stage)} - {escape(match["utc_date"] or "")}</div>'
+                    "</div>"
+                    f'<div class="score-badge">{len(locked_predictions)}/{len(PLAYERS)} locked</div>'
+                    "</div>"
+                    "</div>"
+                ),
+                unsafe_allow_html=True,
+            )
+
+            if locked:
+                penalty_label = ""
+                if locked.get("penalty_winner") == "home":
+                    penalty_label = f" pens: {home_team}"
+                elif locked.get("penalty_winner") == "away":
+                    penalty_label = f" pens: {away_team}"
+                st.markdown(
+                    (
+                        f'<div class="list-card" style="border-left: 6px solid {color}">'
+                        '<div class="list-top">'
+                        "<div>"
+                        f'<div class="list-title">{escape(selected_player)}</div>'
+                        f'<div class="list-meta">Locked at {escape(locked["locked_at"] or "")}</div>'
+                        "</div>"
+                        f'<div class="score-badge">{locked["home_score"]}-{locked["away_score"]}{escape(penalty_label)}</div>'
+                        "</div>"
+                        "</div>"
+                    ),
+                    unsafe_allow_html=True,
+                )
+                continue
+
+            row = st.columns([0.95, 0.95, 1.05, 0.65, 0.65], gap="small")
+            with row[0]:
+                home_score = st.number_input(
+                    home_team,
+                    min_value=0,
+                    max_value=20,
+                    step=1,
+                    key=f"{selected_player}_{match['id']}_home",
+                )
+            with row[1]:
+                away_score = st.number_input(
+                    away_team,
+                    min_value=0,
+                    max_value=20,
+                    step=1,
+                    key=f"{selected_player}_{match['id']}_away",
+                )
+
+            penalty_winner = None
+            with row[2]:
+                if home_score == away_score:
+                    penalty_choice = st.selectbox(
+                        "Pens",
+                        [home_team, away_team],
+                        key=f"{selected_player}_{match['id']}_pens",
+                    )
+                    penalty_winner = "home" if penalty_choice == home_team else "away"
+                else:
+                    st.markdown('<div style="height:2.75rem"></div>', unsafe_allow_html=True)
+
+            with row[3]:
+                confirmed = st.checkbox(
+                    "Sure?",
+                    key=f"{selected_player}_{match['id']}_confirm",
+                )
+            with row[4]:
+                if st.button("Lock", key=f"{selected_player}_{match['id']}_lock", use_container_width=True):
+                    if not confirmed:
+                        st.warning("Tick Sure? before locking.")
+                    elif lock_match_prediction(conn, selected_player, match["id"], home_score, away_score, penalty_winner):
+                        st.success(f"Locked {selected_player}: {home_score}-{away_score}")
+                        st.rerun()
+                    else:
+                        st.info(f"{selected_player} already locked this match.")
 
 def render_participants():
     st.subheader("Players")
@@ -698,7 +923,7 @@ def render_participants():
                 )
 
 
-conn, leaders, events, matches, played, stats, teams = load_state()
+conn, leaders, events, stats, teams, upcoming, played = load_state()
 
 st.markdown(
     """
@@ -720,7 +945,7 @@ with top_left:
                 f"for {new_points} points."
             )
             load_scorers.clear()
-            conn, leaders, events, matches, played, stats, teams = load_state()
+            conn, leaders, events, stats, teams, upcoming, played = load_state()
         except FootballDataError as exc:
             st.error(str(exc))
 with top_right:
@@ -737,13 +962,22 @@ with chart_col:
 with log_col:
     render_score_events(events)
 
-render_scorer_tables(teams)
-
-tabs = st.tabs(["Matches", "Players"])
+tabs = st.tabs(["Predictions", "Players"])
 with tabs[0]:
-    render_recent_matches(played)
+    render_match_predictions(conn, upcoming)
 with tabs[1]:
     render_participants()
+
+render_scorer_tables(teams)
+
+st.subheader("Results")
+render_recent_matches(played)
+
+
+
+
+
+
 
 
 

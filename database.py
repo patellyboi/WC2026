@@ -50,6 +50,17 @@ CREATE TABLE IF NOT EXISTS score_events (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(player) REFERENCES players(name)
 );
+
+CREATE TABLE IF NOT EXISTS match_predictions (
+    player TEXT NOT NULL,
+    match_id TEXT NOT NULL,
+    home_score INTEGER NOT NULL,
+    away_score INTEGER NOT NULL,
+    locked_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(player, match_id),
+    FOREIGN KEY(player) REFERENCES players(name),
+    FOREIGN KEY(match_id) REFERENCES matches(id)
+);
 """
 
 
@@ -61,6 +72,9 @@ def connect(db_path=DB_PATH):
 
 def init_db(conn):
     conn.executescript(SCHEMA)
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(match_predictions)")]
+    if "penalty_winner" not in columns:
+        conn.execute("ALTER TABLE match_predictions ADD COLUMN penalty_winner TEXT")
     for player, data in PLAYERS.items():
         conn.execute("INSERT OR IGNORE INTO players(name) VALUES (?)", (player,))
         for team in data["teams"]:
@@ -224,3 +238,74 @@ def top_scoring_teams(conn, limit=8):
         """,
         (limit,),
     ).fetchall()
+
+def upcoming_matches(conn, limit=100):
+    return conn.execute(
+        """
+        SELECT id, utc_date, competition, stage, status, home_team, away_team,
+               home_score, away_score
+        FROM matches
+        WHERE status IN ('SCHEDULED', 'TIMED')
+          AND utc_date > strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+          AND home_team IS NOT NULL
+          AND away_team IS NOT NULL
+        ORDER BY utc_date ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def next_available_match(conn):
+    rows = upcoming_matches(conn, limit=1)
+    return rows[0] if rows else None
+
+
+def match_predictions(conn, match_id):
+    return conn.execute(
+        """
+        SELECT player, match_id, home_score, away_score, penalty_winner, locked_at
+        FROM match_predictions
+        WHERE match_id = ?
+        ORDER BY player ASC
+        """,
+        (str(match_id),),
+    ).fetchall()
+
+
+def lock_match_prediction(conn, player, match_id, home_score, away_score, penalty_winner=None):
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO match_predictions(
+            player, match_id, home_score, away_score, penalty_winner
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (player, str(match_id), int(home_score), int(away_score), penalty_winner),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def predictions_for_match(conn, match_id):
+    return conn.execute(
+        """
+        SELECT player, home_score, away_score, penalty_winner
+        FROM match_predictions
+        WHERE match_id = ?
+        """,
+        (str(match_id),),
+    ).fetchall()
+
+def delete_match_prediction(conn, player, match_id):
+    cursor = conn.execute(
+        """
+        DELETE FROM match_predictions
+        WHERE player = ? AND match_id = ?
+        """,
+        (player, str(match_id)),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
