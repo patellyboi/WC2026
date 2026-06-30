@@ -100,6 +100,7 @@ PLAYERS = {
 
 TEAM_ALIASES = {
     "Bosnia and Herzegovina": "Bosnia-Herzegovina",
+    "Cape Verde Islands": "Cabo Verde",
     "Congo DR": "Congo DR",
     "DR Congo": "Congo DR",
     "Cote d'Ivoire": "Ivory Coast",
@@ -122,3 +123,5 @@ def owner_for_team(team_name):
         if canonical_name in data["teams"]:
             return player
     return None
+
+

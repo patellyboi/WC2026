@@ -176,8 +176,10 @@ def score_finished_match(match):
 
 
 def score_advancement(team_name, stage):
+    stage = stage.upper()
+    team_name = canonical_team_name(team_name)
     owner = owner_for_team(team_name)
-    points = KNOCKOUT_STAGE_POINTS.get(stage.upper())
+    points = KNOCKOUT_STAGE_POINTS.get(stage)
     if not owner or not points:
         return None
 
@@ -188,6 +190,57 @@ def score_advancement(team_name, stage):
         "reason": f"Reached {stage.replace('_', ' ').title()}",
         "match_id": f"advancement:{team_name}:{stage}",
     }
+
+
+def score_match_advancements(match):
+    stage = (match.get("stage") or "").upper()
+    if stage not in KNOCKOUT_STAGE_POINTS:
+        return []
+
+    events = []
+    seen_teams = set()
+    for side in ("homeTeam", "awayTeam"):
+        team_name = match.get(side, {}).get("name")
+        if not team_name:
+            continue
+
+        canonical_name = canonical_team_name(team_name)
+        normalized_name = canonical_name.casefold()
+        if normalized_name in seen_teams:
+            continue
+        seen_teams.add(normalized_name)
+
+        event = score_advancement(canonical_name, stage)
+        if event:
+            events.append(event)
+    return events
+
+
+def score_world_cup_winner(match):
+    if (match.get("stage") or "").upper() != "FINAL" or match.get("status") != "FINISHED":
+        return None
+
+    winner_side = _winner_side_from_api(match)
+    if winner_side:
+        winner = match.get(f"{winner_side}Team", {}).get("name")
+    else:
+        winner = match_winner(match)
+    if not winner:
+        return None
+
+    winner = canonical_team_name(winner)
+    owner = owner_for_team(winner)
+    if not owner:
+        return None
+
+    return {
+        "player": owner,
+        "team": winner,
+        "points": POINTS["world_cup_winner"],
+        "reason": "World Cup Winner",
+        "match_id": f"winner:{winner}",
+    }
+
 
 def _winner_side_from_api(match):
     winner = match.get("score", {}).get("winner")
@@ -250,6 +303,8 @@ def score_locked_match_predictions(conn, match):
                 }
             )
 
+            continue
+
         if predicted_winner and predicted_winner == actual_winner:
             events.append(
                 {
@@ -261,6 +316,10 @@ def score_locked_match_predictions(conn, match):
                 }
             )
     return events
+
+
+
+
 
 
 

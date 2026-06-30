@@ -4,7 +4,12 @@ import time
 from api import FootballDataError, check_token, fetch_world_cup_matches
 from database import add_score_event, connect, init_db, save_match
 from leaderboard import format_leaderboard
-from scoring import score_finished_match, score_locked_match_predictions
+from scoring import (
+    score_finished_match,
+    score_locked_match_predictions,
+    score_match_advancements,
+    score_world_cup_winner,
+)
 
 
 def update_scores():
@@ -16,7 +21,16 @@ def update_scores():
     new_points = 0
     for match in matches:
         save_match(conn, match)
-        for event in score_finished_match(match) + score_locked_match_predictions(conn, match):
+        scoring_events = (
+            score_finished_match(match)
+            + score_locked_match_predictions(conn, match)
+            + score_match_advancements(match)
+        )
+        winner_event = score_world_cup_winner(match)
+        if winner_event:
+            scoring_events.append(winner_event)
+
+        for event in scoring_events:
             if add_score_event(conn, event):
                 new_events += 1
                 new_points += event["points"]
@@ -81,4 +95,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
