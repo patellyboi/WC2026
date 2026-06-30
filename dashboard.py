@@ -789,8 +789,9 @@ def render_match_predictions(conn, matches):
             row["player"]: dict(row)
             for row in match_predictions(conn, match["id"])
         }
-        home_team = match["home_team"] or "Home"
-        away_team = match["away_team"] or "Away"
+        teams_known = bool(match["home_team"] and match["away_team"])
+        home_team = match["home_team"] or "TBD"
+        away_team = match["away_team"] or "TBD"
         stage = title_case_label(match["stage"] or "Upcoming")
         locked = locked_predictions.get(selected_player)
 
@@ -812,6 +813,10 @@ def render_match_predictions(conn, matches):
                 ),
                 unsafe_allow_html=True,
             )
+
+            if not teams_known:
+                st.info("Teams are not confirmed yet. Prediction entry will open when both teams are known.")
+                continue
 
             if locked:
                 penalty_label = ""
@@ -972,6 +977,9 @@ render_scorer_tables(teams)
 
 st.subheader("Results")
 render_recent_matches(played)
+
+
+
 
 
 

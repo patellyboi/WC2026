@@ -110,16 +110,25 @@ def fetch_recent_world_cup_matches(days_back=3, days_forward=3):
     )
 
 
-def fetch_world_cup_matches(days_forward=3):
+def fetch_world_cup_matches(days_forward=None):
     load_dotenv_file()
     competition = os.getenv("FOOTBALL_DATA_COMPETITION", "WC")
     start = date.fromisoformat(os.getenv("WORLD_CUP_START_DATE", "2026-06-11"))
-    end = date.today() + timedelta(days=days_forward)
+    end_date = os.getenv("WORLD_CUP_END_DATE")
+    if end_date:
+        end = date.fromisoformat(end_date)
+    elif days_forward is None:
+        end = date.fromisoformat("2026-07-19")
+    else:
+        end = date.today() + timedelta(days=days_forward)
     matches = []
     window_start = start
 
-    while window_start <= end:
-        window_end = min(window_start + timedelta(days=9), end)
+    # football-data.org treats dateTo as an exclusive boundary here, while also
+    # rejecting periods longer than 10 days.
+    exclusive_end = end + timedelta(days=1)
+    while window_start < exclusive_end:
+        window_end = min(window_start + timedelta(days=10), exclusive_end)
         matches.extend(
             fetch_matches(
                 date_from=window_start.isoformat(),
@@ -127,6 +136,12 @@ def fetch_world_cup_matches(days_forward=3):
                 competition=competition,
             )
         )
-        window_start = window_end + timedelta(days=1)
+        window_start = window_end
 
-    return matches
+    unique_matches = {}
+    for match in matches:
+        unique_matches[str(match.get("id"))] = match
+    return list(unique_matches.values())
+
+
+

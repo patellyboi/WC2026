@@ -199,7 +199,14 @@ def tournament_stats(conn):
         SELECT
             COUNT(*) AS stored_matches,
             SUM(CASE WHEN status = 'FINISHED' THEN 1 ELSE 0 END) AS finished_matches,
-            SUM(CASE WHEN status != 'FINISHED' THEN 1 ELSE 0 END) AS upcoming_matches,
+            SUM(
+                CASE
+                    WHEN status IN ('SCHEDULED', 'TIMED')
+                     AND utc_date > strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS upcoming_matches,
             SUM(
                 CASE
                     WHEN status = 'FINISHED'
@@ -247,8 +254,6 @@ def upcoming_matches(conn, limit=100):
         FROM matches
         WHERE status IN ('SCHEDULED', 'TIMED')
           AND utc_date > strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-          AND home_team IS NOT NULL
-          AND away_team IS NOT NULL
         ORDER BY utc_date ASC
         LIMIT ?
         """,
@@ -307,5 +312,7 @@ def delete_match_prediction(conn, player, match_id):
     )
     conn.commit()
     return cursor.rowcount
+
+
 
 
