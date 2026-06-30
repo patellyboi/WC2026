@@ -303,7 +303,6 @@ def score_locked_match_predictions(conn, match):
                 }
             )
 
-            continue
 
         if predicted_winner and predicted_winner == actual_winner:
             events.append(
