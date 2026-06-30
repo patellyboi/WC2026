@@ -159,9 +159,11 @@ def leaderboard(conn):
 def score_events(conn):
     return conn.execute(
         """
-        SELECT player, team, points, reason, source_id, created_at
-        FROM score_events
-        ORDER BY created_at DESC, id DESC
+        SELECT e.player, e.team, e.points, e.reason, e.source_id, e.created_at,
+               m.utc_date, m.stage, m.home_team, m.away_team
+        FROM score_events e
+        LEFT JOIN matches m ON m.id = e.source_id
+        ORDER BY COALESCE(m.utc_date, e.created_at) DESC, e.id DESC
         """
     ).fetchall()
 
@@ -312,6 +314,7 @@ def delete_match_prediction(conn, player, match_id):
     )
     conn.commit()
     return cursor.rowcount
+
 
 
 

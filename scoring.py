@@ -205,6 +205,21 @@ def _score_winner_from_values(home_goals, away_goals, penalty_winner=None):
         return penalty_winner
     return "home" if home_goals > away_goals else "away"
 
+def _prediction_score_values(match):
+    score = match.get("score", {})
+    if score.get("duration") == "PENALTY_SHOOTOUT":
+        regular = score.get("regularTime") or {}
+        extra = score.get("extraTime") or {}
+        regular_home = regular.get("home")
+        regular_away = regular.get("away")
+        if regular_home is None or regular_away is None:
+            return _score_value(match, "home"), _score_value(match, "away")
+        return (
+            regular_home + (extra.get("home") or 0),
+            regular_away + (extra.get("away") or 0),
+        )
+    return _score_value(match, "home"), _score_value(match, "away")
+
 
 def score_locked_match_predictions(conn, match):
     if match.get("status") != "FINISHED" or not is_knockout_match(match):
@@ -212,8 +227,7 @@ def score_locked_match_predictions(conn, match):
 
     home_team = match.get("homeTeam", {}).get("name")
     away_team = match.get("awayTeam", {}).get("name")
-    home_goals = _score_value(match, "home")
-    away_goals = _score_value(match, "away")
+    home_goals, away_goals = _prediction_score_values(match)
     if home_goals is None or away_goals is None:
         return []
 
@@ -247,6 +261,8 @@ def score_locked_match_predictions(conn, match):
                 }
             )
     return events
+
+
 
 
 

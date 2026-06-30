@@ -716,12 +716,15 @@ def render_score_events(events):
     cards = ['<div class="scroll-panel">']
     for event in events[:8]:
         color = player_color(event["player"])
+        stage = title_case_label(event.get("stage") or "")
+        match_date = (event.get("utc_date") or event.get("created_at") or "")[:10]
+        meta = " - ".join(part for part in [event["reason"], stage, match_date] if part)
         cards.append(
             '<div class="list-card">'
             '<div class="list-top">'
             "<div>"
             f'<div class="list-title">{escape(event["player"])} - {escape(event["team"] or "")}</div>'
-            f'<div class="list-meta">{escape(event["reason"])}</div>'
+            f'<div class="list-meta">{escape(meta)}</div>'
             "</div>"
             f'<div class="points-badge" style="background: {color}">+{event["points"]}</div>'
             "</div>"
@@ -977,6 +980,7 @@ render_scorer_tables(teams)
 
 st.subheader("Results")
 render_recent_matches(played)
+
 
 
 
