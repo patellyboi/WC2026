@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from participants import PLAYERS
@@ -168,6 +169,35 @@ def score_events(conn):
     ).fetchall()
 
 
+def all_match_predictions(conn):
+    return conn.execute(
+        """
+        SELECT mp.player, mp.match_id, mp.home_score, mp.away_score,
+               mp.penalty_winner, mp.locked_at, m.utc_date, m.stage, m.status,
+               m.home_team, m.away_team
+        FROM match_predictions mp
+        LEFT JOIN matches m ON m.id = mp.match_id
+        ORDER BY COALESCE(m.utc_date, mp.locked_at) ASC, m.id ASC, mp.player ASC
+        """
+    ).fetchall()
+
+
+def add_manual_points(conn, player, points, reason):
+    created_at = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+    source_id = f"manual:{created_at}"
+    event_key = f"{source_id}:{player}:{reason}"
+    conn.execute(
+        """
+        INSERT INTO score_events(
+            event_key, player, team, points, reason, source_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (event_key, player, None, int(points), reason, source_id),
+    )
+    conn.commit()
+    return source_id
+
 def recent_matches(conn, limit=20):
     return conn.execute(
         """
@@ -314,6 +344,7 @@ def delete_match_prediction(conn, player, match_id):
     )
     conn.commit()
     return cursor.rowcount
+
 
 
 

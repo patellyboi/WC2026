@@ -6,6 +6,9 @@ import streamlit as st
 from api import FootballDataError, fetch_scorers
 from app import update_scores
 from database import (
+    DB_PATH,
+    add_manual_points,
+    all_match_predictions,
     connect,
     init_db,
     leaderboard,
@@ -888,6 +891,114 @@ def render_match_predictions(conn, matches):
                     else:
                         st.info(f"{selected_player} already locked this match.")
 
+def prediction_score_label(prediction):
+    score = f"{prediction['home_score']}-{prediction['away_score']}"
+    winner = prediction.get("penalty_winner")
+    if winner == "home":
+        score += f" pens: {prediction.get('home_team') or 'Home'}"
+    elif winner == "away":
+        score += f" pens: {prediction.get('away_team') or 'Away'}"
+    return score
+
+
+def render_developer_tools(conn):
+    st.subheader("Developer Tools")
+
+    if not st.session_state.get("developer_authenticated", False):
+        with st.form("developer_password_form"):
+            password = st.text_input("Developer password", type="password")
+            submitted = st.form_submit_button("Unlock", use_container_width=True)
+        if submitted:
+            if password == "jaywins":
+                st.session_state.developer_authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+        return
+
+    if st.button("Lock Developer Tools", use_container_width=True):
+        st.session_state.developer_authenticated = False
+        st.rerun()
+
+    try:
+        st.download_button(
+            "Download current database",
+            data=DB_PATH.read_bytes(),
+            file_name="database.db",
+            mime="application/octet-stream",
+            use_container_width=True,
+        )
+    except OSError:
+        st.warning("Database file could not be read for download.")
+
+    predictions = [dict(row) for row in all_match_predictions(conn)]
+    st.markdown("#### Locked Scores")
+    if not predictions:
+        st.info("No locked match scores are stored yet.")
+    else:
+        match_labels = []
+        seen_matches = set()
+        for prediction in predictions:
+            match_id = prediction["match_id"]
+            if match_id in seen_matches:
+                continue
+            seen_matches.add(match_id)
+            home_team = prediction.get("home_team") or "TBD"
+            away_team = prediction.get("away_team") or "TBD"
+            date_label = (prediction.get("utc_date") or "No date")[:16]
+            match_labels.append((match_id, f"{date_label} - {home_team} vs {away_team}"))
+
+        selected_label = st.selectbox(
+            "Match filter",
+            ["All matches"] + [label for _, label in match_labels],
+        )
+        selected_match = None
+        if selected_label != "All matches":
+            selected_match = next(
+                match_id for match_id, label in match_labels if label == selected_label
+            )
+
+        rows = []
+        for prediction in predictions:
+            if selected_match and prediction["match_id"] != selected_match:
+                continue
+            home_team = prediction.get("home_team") or "TBD"
+            away_team = prediction.get("away_team") or "TBD"
+            rows.append(
+                {
+                    "Match": f"{home_team} vs {away_team}",
+                    "Date": prediction.get("utc_date") or "",
+                    "Stage": title_case_label(prediction.get("stage") or ""),
+                    "Status": prediction.get("status") or "",
+                    "Player": prediction["player"],
+                    "Locked Score": prediction_score_label(prediction),
+                    "Locked At": prediction.get("locked_at") or "",
+                }
+            )
+
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    st.markdown("#### Add Manual Points")
+    with st.form("manual_points_form"):
+        col_player, col_points = st.columns([1.2, 0.8])
+        with col_player:
+            player = st.selectbox("Player", list(PLAYERS.keys()))
+        with col_points:
+            points = st.number_input("Points", min_value=1, max_value=100, step=1)
+        reason = st.text_input("Reason", placeholder="Example: admin correction")
+        confirmed = st.checkbox("I have checked this manual points change")
+        submitted = st.form_submit_button("Add Points", use_container_width=True)
+
+    if submitted:
+        clean_reason = reason.strip()
+        if not clean_reason:
+            st.warning("Enter a reason before adding points.")
+        elif not confirmed:
+            st.warning("Tick the confirmation box before adding points.")
+        else:
+            source_id = add_manual_points(conn, player, points, f"Manual: {clean_reason}")
+            st.success(f"Added {points} points to {player}. Reference: {source_id}")
+            st.rerun()
 def render_participants():
     st.subheader("Players")
     if "selected_player" not in st.session_state:
@@ -970,16 +1081,21 @@ with chart_col:
 with log_col:
     render_score_events(events)
 
-tabs = st.tabs(["Predictions", "Players"])
+tabs = st.tabs(["Predictions", "Players", "Developer"])
 with tabs[0]:
     render_match_predictions(conn, upcoming)
 with tabs[1]:
     render_participants()
+with tabs[2]:
+    render_developer_tools(conn)
 
 render_scorer_tables(teams)
 
 st.subheader("Results")
 render_recent_matches(played)
+
+
+
 
 
 
