@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from html import escape
 import altair as alt
 import pandas as pd
@@ -13,6 +14,7 @@ from database import (
     init_db,
     leaderboard,
     lock_match_prediction,
+    match_lock_summary,
     match_predictions,
     played_matches,
     score_events,
@@ -920,6 +922,7 @@ def render_developer_tools(conn):
         st.session_state.developer_authenticated = False
         st.rerun()
 
+    st.markdown("#### Database Safety")
     try:
         st.download_button(
             "Download current database",
@@ -930,6 +933,50 @@ def render_developer_tools(conn):
         )
     except OSError:
         st.warning("Database file could not be read for download.")
+
+    uploaded_db = st.file_uploader("Restore database from backup", type=["db", "sqlite", "sqlite3"])
+    restore_confirm = st.text_input("Type RESTORE to replace the current database")
+    if st.button("Restore Uploaded Database", use_container_width=True):
+        if uploaded_db is None:
+            st.warning("Choose a database file first.")
+        elif restore_confirm != "RESTORE":
+            st.warning("Type RESTORE before replacing the database.")
+        else:
+            db_bytes = uploaded_db.getvalue()
+            if not db_bytes.startswith(b"SQLite format 3"):
+                st.error("The uploaded file is not a valid SQLite database.")
+                return
+            backup_name = datetime.now(timezone.utc).strftime("database.before-restore-%Y%m%d%H%M%S.db")
+            backup_path = DB_PATH.with_name(backup_name)
+            try:
+                backup_path.write_bytes(DB_PATH.read_bytes())
+            except OSError:
+                pass
+            conn.close()
+            DB_PATH.write_bytes(db_bytes)
+            st.success("Database restored. The app will reload now.")
+            st.rerun()
+
+    st.markdown("#### Lock Audit")
+    lock_rows = []
+    for row in match_lock_summary(conn):
+        row = dict(row)
+        home_team = row.get("home_team") or "TBD"
+        away_team = row.get("away_team") or "TBD"
+        locked_count = int(row.get("locked_count") or 0)
+        lock_rows.append(
+            {
+                "Match": f"{home_team} vs {away_team}",
+                "Date": row.get("utc_date") or "",
+                "Stage": title_case_label(row.get("stage") or ""),
+                "Status": row.get("status") or "",
+                "Locked": f"{locked_count}/{len(PLAYERS)}",
+            }
+        )
+    if lock_rows:
+        st.dataframe(pd.DataFrame(lock_rows), hide_index=True, use_container_width=True)
+    else:
+        st.info("No matches are stored yet.")
 
     predictions = [dict(row) for row in all_match_predictions(conn)]
     st.markdown("#### Locked Scores")

@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS match_predictions (
     home_score INTEGER NOT NULL,
     away_score INTEGER NOT NULL,
     locked_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    locked INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY(player, match_id),
     FOREIGN KEY(player) REFERENCES players(name),
     FOREIGN KEY(match_id) REFERENCES matches(id)
@@ -76,6 +78,17 @@ def init_db(conn):
     columns = [row[1] for row in conn.execute("PRAGMA table_info(match_predictions)")]
     if "penalty_winner" not in columns:
         conn.execute("ALTER TABLE match_predictions ADD COLUMN penalty_winner TEXT")
+    if "locked" not in columns:
+        conn.execute("ALTER TABLE match_predictions ADD COLUMN locked INTEGER NOT NULL DEFAULT 1")
+    if "updated_at" not in columns:
+        conn.execute("ALTER TABLE match_predictions ADD COLUMN updated_at TEXT")
+        conn.execute(
+            """
+            UPDATE match_predictions
+            SET updated_at = COALESCE(locked_at, CURRENT_TIMESTAMP)
+            WHERE updated_at IS NULL
+            """
+        )
     for player, data in PLAYERS.items():
         conn.execute("INSERT OR IGNORE INTO players(name) VALUES (?)", (player,))
         for team in data["teams"]:
@@ -173,7 +186,8 @@ def all_match_predictions(conn):
     return conn.execute(
         """
         SELECT mp.player, mp.match_id, mp.home_score, mp.away_score,
-               mp.penalty_winner, mp.locked_at, m.utc_date, m.stage, m.status,
+               mp.penalty_winner, mp.locked_at, mp.locked, mp.updated_at,
+               m.utc_date, m.stage, m.status,
                m.home_team, m.away_team
         FROM match_predictions mp
         LEFT JOIN matches m ON m.id = mp.match_id
@@ -298,12 +312,27 @@ def next_available_match(conn):
     return rows[0] if rows else None
 
 
+def match_lock_summary(conn):
+    return conn.execute(
+        """
+        SELECT m.id AS match_id, m.utc_date, m.stage, m.status, m.home_team, m.away_team,
+               COUNT(mp.player) AS locked_count
+        FROM matches m
+        LEFT JOIN match_predictions mp
+          ON mp.match_id = m.id AND COALESCE(mp.locked, 1) = 1
+        GROUP BY m.id, m.utc_date, m.stage, m.status, m.home_team, m.away_team
+        ORDER BY m.utc_date ASC
+        """
+    ).fetchall()
+
+
 def match_predictions(conn, match_id):
     return conn.execute(
         """
-        SELECT player, match_id, home_score, away_score, penalty_winner, locked_at
+        SELECT player, match_id, home_score, away_score, penalty_winner,
+               locked_at, locked, updated_at
         FROM match_predictions
-        WHERE match_id = ?
+        WHERE match_id = ? AND COALESCE(locked, 1) = 1
         ORDER BY player ASC
         """,
         (str(match_id),),
@@ -314,9 +343,9 @@ def lock_match_prediction(conn, player, match_id, home_score, away_score, penalt
     cursor = conn.execute(
         """
         INSERT OR IGNORE INTO match_predictions(
-            player, match_id, home_score, away_score, penalty_winner
+            player, match_id, home_score, away_score, penalty_winner, locked, updated_at
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
         """,
         (player, str(match_id), int(home_score), int(away_score), penalty_winner),
     )
