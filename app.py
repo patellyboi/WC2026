@@ -1,13 +1,14 @@
 import argparse
 import time
 
-from api import FootballDataError, check_token, fetch_world_cup_matches
+from api import FootballDataError, check_token, fetch_scorers, fetch_world_cup_matches
 from database import add_score_event, connect, init_db, save_match
 from leaderboard import format_leaderboard
 from scoring import (
     score_finished_match,
     score_locked_match_predictions,
     score_match_advancements,
+    score_special_predictions,
     score_world_cup_winner,
 )
 
@@ -34,6 +35,19 @@ def update_scores():
             if add_score_event(conn, event):
                 new_events += 1
                 new_points += event["points"]
+
+    conn.commit()
+
+    scorers = []
+    try:
+        scorers = fetch_scorers(limit=20)
+    except FootballDataError:
+        scorers = []
+
+    for event in score_special_predictions(conn, scorers):
+        if add_score_event(conn, event):
+            new_events += 1
+            new_points += event["points"]
 
     conn.commit()
     return conn, len(matches), new_events, new_points

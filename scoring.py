@@ -316,11 +316,254 @@ def score_locked_match_predictions(conn, match):
             )
     return events
 
+STAGE_RANKS = {
+    "GROUP_STAGE": 0,
+    "GROUP": 0,
+    "LAST_32": 1,
+    "ROUND_OF_32": 1,
+    "LAST_16": 2,
+    "ROUND_OF_16": 2,
+    "QUARTER_FINALS": 3,
+    "SEMI_FINALS": 4,
+    "THIRD_PLACE": 5,
+    "FINAL": 6,
+}
+
+ENGLAND_DISTANCE_STAGES = {
+    "round of 32": "LAST_32",
+    "last 32": "LAST_32",
+    "round of 16": "LAST_16",
+    "last 16": "LAST_16",
+    "quarter-final": "QUARTER_FINALS",
+    "quarter-finals": "QUARTER_FINALS",
+    "quarter final": "QUARTER_FINALS",
+    "quarter finals": "QUARTER_FINALS",
+    "semi-final": "SEMI_FINALS",
+    "semi-finals": "SEMI_FINALS",
+    "semi final": "SEMI_FINALS",
+    "semi finals": "SEMI_FINALS",
+    "final": "FINAL",
+    "winner": "FINAL",
+}
 
 
+def _event(player, team, points, reason, source_id):
+    return {
+        "player": player,
+        "team": team,
+        "points": points,
+        "reason": reason,
+        "match_id": source_id,
+    }
 
 
+def _canonical_prediction(value):
+    return canonical_team_name(str(value or "")).casefold()
 
 
+def _team_highest_stage(conn, team_name):
+    rows = conn.execute(
+        """
+        SELECT stage
+        FROM matches
+        WHERE home_team = ? OR away_team = ?
+        """,
+        (team_name, team_name),
+    ).fetchall()
+    best_stage = None
+    best_rank = -1
+    for row in rows:
+        stage = (row["stage"] or "").upper()
+        rank = STAGE_RANKS.get(stage, -1)
+        if rank > best_rank:
+            best_rank = rank
+            best_stage = stage
+    return best_stage, best_rank
 
+
+def _finished_final_winner(conn):
+    row = conn.execute(
+        """
+        SELECT home_team, away_team, home_score, away_score
+        FROM matches
+        WHERE stage = 'FINAL' AND status = 'FINISHED'
+        ORDER BY utc_date DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row or row["home_score"] is None or row["away_score"] is None:
+        return None
+    if row["home_score"] == row["away_score"]:
+        return None
+    return row["home_team"] if row["home_score"] > row["away_score"] else row["away_team"]
+
+
+def score_winner_predictions(conn):
+    winner = _finished_final_winner(conn)
+    if not winner:
+        return []
+    winner_key = canonical_team_name(winner).casefold()
+    events = []
+    for player, data in PLAYERS.items():
+        if _canonical_prediction(data["predictions"].get("winner")) == winner_key:
+            events.append(
+                _event(
+                    player,
+                    winner,
+                    POINTS["winner_prediction"],
+                    "Winner Prediction",
+                    f"special:winner_prediction:{winner}",
+                )
+            )
+    return events
+
+
+def score_dark_horse_predictions(conn):
+    dark_horses = {}
+    for player, data in PLAYERS.items():
+        team = canonical_team_name(data["predictions"].get("dark_horse"))
+        stage, rank = _team_highest_stage(conn, team)
+        if rank >= 0:
+            dark_horses[player] = (team, stage, rank)
+    if not dark_horses:
+        return []
+
+    best_rank = max(rank for _, _, rank in dark_horses.values())
+    if best_rank <= 0:
+        return []
+
+    furthest = [
+        (player, team, stage, rank)
+        for player, (team, stage, rank) in dark_horses.items()
+        if rank == best_rank
+    ]
+    if len({team.casefold() for _, team, _, _ in furthest}) != 1:
+        return []
+
+    player, team, stage, rank = furthest[0]
+    return [
+        _event(
+            player,
+            team,
+            POINTS["dark_horse"],
+            "Dark Horse",
+            f"special:dark_horse:{team}",
+        )
+    ]
+
+
+def _england_final_stage(conn):
+    rows = conn.execute(
+        """
+        SELECT stage, status, home_team, away_team, home_score, away_score
+        FROM matches
+        WHERE home_team = 'England' OR away_team = 'England'
+        ORDER BY utc_date ASC
+        """
+    ).fetchall()
+    if not rows:
+        return None
+
+    best_finished_stage = None
+    best_finished_rank = -1
+    for row in rows:
+        stage = (row["stage"] or "").upper()
+        rank = STAGE_RANKS.get(stage, -1)
+        if row["status"] == "FINISHED" and rank > best_finished_rank:
+            best_finished_stage = stage
+            best_finished_rank = rank
+
+    future_rows = [row for row in rows if row["status"] != "FINISHED"]
+    if future_rows:
+        return None
+
+    return best_finished_stage
+
+
+def score_england_distance_predictions(conn):
+    final_stage = _england_final_stage(conn)
+    if not final_stage:
+        return []
+    events = []
+    for player, data in PLAYERS.items():
+        prediction = str(data["predictions"].get("england_distance", "")).casefold().strip()
+        predicted_stage = ENGLAND_DISTANCE_STAGES.get(prediction)
+        if predicted_stage == final_stage:
+            events.append(
+                _event(
+                    player,
+                    "England",
+                    POINTS["england_distance"],
+                    "England Distance",
+                    f"special:england_distance:{final_stage}",
+                )
+            )
+    return events
+
+
+def score_goals_scored_predictions(conn):
+    if not _finished_final_winner(conn):
+        return []
+    row = conn.execute(
+        """
+        SELECT SUM(COALESCE(home_score, 0) + COALESCE(away_score, 0)) AS total_goals
+        FROM matches
+        WHERE status = 'FINISHED'
+        """
+    ).fetchone()
+    total_goals = row["total_goals"] if row else None
+    if total_goals is None:
+        return []
+    events = []
+    for player, data in PLAYERS.items():
+        try:
+            predicted_goals = int(data["predictions"].get("goals_scored"))
+        except (TypeError, ValueError):
+            continue
+        if predicted_goals == int(total_goals):
+            events.append(
+                _event(
+                    player,
+                    None,
+                    POINTS["goals_scored"],
+                    "Goals Scored Prediction",
+                    f"special:goals_scored:{int(total_goals)}",
+                )
+            )
+    return events
+
+
+def score_golden_boot_predictions(conn, scorers):
+    if not _finished_final_winner(conn) or not scorers:
+        return []
+    top_goals = max((row.get("goals") or 0) for row in scorers)
+    top_names = {
+        str(row.get("player", {}).get("name", "")).casefold()
+        for row in scorers
+        if (row.get("goals") or 0) == top_goals
+    }
+    events = []
+    for player, data in PLAYERS.items():
+        prediction = str(data["predictions"].get("golden_boot", "")).casefold()
+        if prediction in top_names:
+            events.append(
+                _event(
+                    player,
+                    data["predictions"].get("golden_boot"),
+                    POINTS["golden_boot"],
+                    "Golden Boot Prediction",
+                    f"special:golden_boot:{data['predictions'].get('golden_boot')}",
+                )
+            )
+    return events
+
+
+def score_special_predictions(conn, scorers=None):
+    events = []
+    events.extend(score_winner_predictions(conn))
+    events.extend(score_dark_horse_predictions(conn))
+    events.extend(score_england_distance_predictions(conn))
+    events.extend(score_goals_scored_predictions(conn))
+    events.extend(score_golden_boot_predictions(conn, scorers or []))
+    return events
 
