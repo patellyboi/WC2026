@@ -514,19 +514,27 @@ def score_goals_scored_predictions(conn):
     total_goals = row["total_goals"] if row else None
     if total_goals is None:
         return []
-    events = []
+
+    predictions = []
     for player, data in PLAYERS.items():
         try:
             predicted_goals = int(data["predictions"].get("goals_scored"))
         except (TypeError, ValueError):
             continue
-        if predicted_goals == int(total_goals):
+        predictions.append((player, predicted_goals, abs(predicted_goals - int(total_goals))))
+    if not predictions:
+        return []
+
+    closest_difference = min(difference for _, _, difference in predictions)
+    events = []
+    for player, predicted_goals, difference in predictions:
+        if difference == closest_difference:
             events.append(
                 _event(
                     player,
-                    None,
+                    str(int(total_goals)),
                     POINTS["goals_scored"],
-                    "Goals Scored Prediction",
+                    "Closest Goals Scored Prediction",
                     f"special:goals_scored:{int(total_goals)}",
                 )
             )

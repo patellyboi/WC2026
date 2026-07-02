@@ -2,7 +2,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from participants import PLAYERS
+from participants import PLAYERS, canonical_team_name
 
 
 DB_PATH = Path(__file__).with_name("database.db")
@@ -182,6 +182,77 @@ def score_events(conn):
     ).fetchall()
 
 
+def latest_match_score_events(conn, limit=6):
+    next_advancement_stage = {
+        "LAST_32": "LAST_16",
+        "ROUND_OF_32": "LAST_16",
+        "LAST_16": "QUARTER_FINALS",
+        "ROUND_OF_16": "QUARTER_FINALS",
+        "QUARTER_FINALS": "SEMI_FINALS",
+        "SEMI_FINALS": "FINAL",
+        "FINAL": "FINAL",
+    }
+    latest_matches = conn.execute(
+        """
+        SELECT id, utc_date, stage, home_team, away_team
+        FROM matches
+        WHERE status = 'FINISHED'
+        ORDER BY utc_date DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    if not latest_matches:
+        return []
+
+    candidate_events = conn.execute(
+        """
+        SELECT id, player, team, points, reason, source_id, created_at
+        FROM score_events
+        ORDER BY id DESC
+        """
+    ).fetchall()
+
+    rows = []
+    seen_event_ids = set()
+    for match in latest_matches:
+        match_id = str(match["id"])
+        stage = (match["stage"] or "").upper()
+        next_stage = next_advancement_stage.get(stage)
+        match_teams = {
+            canonical_team_name(match["home_team"] or "").casefold(),
+            canonical_team_name(match["away_team"] or "").casefold(),
+        }
+        for event in candidate_events:
+            if event["id"] in seen_event_ids:
+                continue
+            source_id = str(event["source_id"] or "")
+            event_team = canonical_team_name(event["team"] or "").casefold()
+            include = source_id == match_id
+            if not include and source_id.startswith("advancement:") and next_stage:
+                include = source_id.endswith(f":{next_stage}") and event_team in match_teams
+            if not include and stage == "FINAL" and source_id.startswith("winner:"):
+                include = event_team in match_teams
+            if not include:
+                continue
+            seen_event_ids.add(event["id"])
+            rows.append(
+                {
+                    "player": event["player"],
+                    "team": event["team"],
+                    "points": event["points"],
+                    "reason": event["reason"],
+                    "source_id": event["source_id"],
+                    "created_at": event["created_at"],
+                    "utc_date": match["utc_date"],
+                    "stage": match["stage"],
+                    "home_team": match["home_team"],
+                    "away_team": match["away_team"],
+                }
+            )
+    return rows
+
+
 def all_match_predictions(conn):
     return conn.execute(
         """
@@ -228,7 +299,7 @@ def recent_matches(conn, limit=20):
 def played_matches(conn, limit=30):
     return conn.execute(
         """
-        SELECT utc_date, competition, stage, status, home_team, away_team,
+        SELECT id, utc_date, competition, stage, status, home_team, away_team,
                home_score, away_score
         FROM matches
         WHERE status = 'FINISHED'

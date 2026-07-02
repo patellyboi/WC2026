@@ -461,6 +461,69 @@ st.markdown(
         color: #102a2a !important;
     }
 
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input,
+    div[data-baseweb="input"] input,
+    div[data-baseweb="base-input"] input {
+        background: #ffffff !important;
+        border-color: #96f2d7 !important;
+        color: #102a2a !important;
+        -webkit-text-fill-color: #102a2a !important;
+    }
+
+    div[data-testid="stTextInput"] input::placeholder {
+        color: #667085 !important;
+        opacity: 1 !important;
+        -webkit-text-fill-color: #667085 !important;
+    }
+
+    div[data-testid="stNumberInput"] button,
+    div[data-testid="stFormSubmitButton"] button,
+    div[data-testid="stDownloadButton"] button,
+    div[data-testid="stFileUploader"] button {
+        background: #ffffff !important;
+        border: 1px solid #96f2d7 !important;
+        color: #007f73 !important;
+    }
+
+    .developer-table-wrap {
+        background: #ffffff;
+        border: 1px solid #b8eadf;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(8, 112, 105, 0.08);
+        margin-bottom: 1rem;
+        max-height: 360px;
+        overflow: auto;
+    }
+
+    table.developer-table {
+        border-collapse: collapse;
+        color: #102a2a;
+        font-size: 0.94rem;
+        width: 100%;
+    }
+
+    table.developer-table th {
+        background: #e6fcf5;
+        color: #004f48;
+        font-weight: 900;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+    }
+
+    table.developer-table th,
+    table.developer-table td {
+        border-bottom: 1px solid #d9f7ef;
+        padding: 0.55rem 0.65rem;
+        text-align: left;
+        vertical-align: top;
+    }
+
+    table.developer-table tr:nth-child(even) td {
+        background: #f7fffc;
+    }
+
     .prediction-match-row {
         align-items: center;
         display: grid;
@@ -522,7 +585,7 @@ def load_state():
     conn = connect()
     init_db(conn)
     leaders = [dict(row) for row in leaderboard(conn)]
-    events = [dict(row) for row in score_events(conn)]
+    events = [dict(row) for row in score_events(conn)][:30]
     stats = tournament_stats(conn)
     teams = [dict(row) for row in top_scoring_teams(conn)]
     upcoming = [dict(row) for row in upcoming_matches(conn)]
@@ -719,11 +782,14 @@ def render_score_events(events):
         return
 
     cards = ['<div class="scroll-panel">']
-    for event in events[:8]:
+    for event in events[:30]:
         color = player_color(event["player"])
         stage = title_case_label(event.get("stage") or "")
         match_date = (event.get("utc_date") or event.get("created_at") or "")[:10]
-        meta = " - ".join(part for part in [event["reason"], stage, match_date] if part)
+        match_label = " vs ".join(
+            part for part in [event.get("home_team"), event.get("away_team")] if part
+        )
+        meta = " - ".join(part for part in [event["reason"], match_label, stage, match_date] if part)
         cards.append(
             '<div class="list-card">'
             '<div class="list-top">'
@@ -893,6 +959,26 @@ def render_match_predictions(conn, matches):
                     else:
                         st.info(f"{selected_player} already locked this match.")
 
+def render_plain_table(rows):
+    if not rows:
+        return
+    columns = list(rows[0].keys())
+    header = "".join(f"<th>{escape(str(column))}</th>" for column in columns)
+    body = []
+    for row in rows:
+        cells = "".join(
+            f"<td>{escape(str(row.get(column, '')))}</td>"
+            for column in columns
+        )
+        body.append(f"<tr>{cells}</tr>")
+    st.markdown(
+        "<div class='developer-table-wrap'><table class='developer-table'>"
+        f"<thead><tr>{header}</tr></thead><tbody>{''.join(body)}</tbody>"
+        "</table></div>",
+        unsafe_allow_html=True,
+    )
+
+
 def prediction_score_label(prediction):
     score = f"{prediction['home_score']}-{prediction['away_score']}"
     winner = prediction.get("penalty_winner")
@@ -974,7 +1060,7 @@ def render_developer_tools(conn):
             }
         )
     if lock_rows:
-        st.dataframe(pd.DataFrame(lock_rows), hide_index=True, use_container_width=True)
+        render_plain_table(lock_rows)
     else:
         st.info("No matches are stored yet.")
 
@@ -1023,7 +1109,7 @@ def render_developer_tools(conn):
                 }
             )
 
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        render_plain_table(rows)
 
     st.markdown("#### Add Manual Points")
     with st.form("manual_points_form"):
